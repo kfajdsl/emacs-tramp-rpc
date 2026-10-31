@@ -509,14 +509,21 @@ server side."
 
 (defun tramp-rpc--cached-remote-path (vec)
   "Return cached remote PATH directories for VEC, computing them if needed.
-Return incomplete results without caching them."
-  (let* ((key (tramp-rpc--connection-key vec))
-         (cached (gethash key tramp-rpc--exec-path-cache)))
-    (or cached
-        (let ((computed (tramp-rpc--compute-remote-path vec)))
-          (when (cdr computed)
-            (puthash key (car computed) tramp-rpc--exec-path-cache))
-          (car computed)))))
+Buffer-local and dynamically bound PATH overrides take precedence and are
+never cached on the connection.  Return incomplete results without caching
+them."
+  (let ((override (assoc "PATH" (tramp-rpc--merge-environments
+                                (tramp-rpc--tramp-remote-process-environment)
+                                (tramp-rpc--caller-environment)))))
+    (if override
+        (parse-colon-path (cdr override))
+      (let* ((key (tramp-rpc--connection-key vec))
+             (cached (gethash key tramp-rpc--exec-path-cache)))
+        (or cached
+            (let ((computed (tramp-rpc--compute-remote-path vec)))
+              (when (cdr computed)
+                (puthash key (car computed) tramp-rpc--exec-path-cache))
+              (car computed)))))))
 
 (defun tramp-rpc--remote-path-environment (vec)
   "Return the configured PATH environment entry for VEC.
@@ -548,6 +555,12 @@ entries from the remote login shell PATH so shell commands behave like
 
 (defvar tramp-remote-process-environment)
 
+(defvar tramp-rpc--inherited-environment-baselines nil
+  "Original remote and local environment defaults during `inheritenv-apply'.
+The car is the remote baseline and the cdr is the local baseline.  Keeping
+these outside the temporary default changes lets RPC distinguish inherited
+buffer overrides from the user's ordinary Emacs environment.")
+
 (defun tramp-rpc--environment-list-to-alist (environment)
   "Convert ENVIRONMENT strings of the form NAME=VALUE to an alist.
 Entries without an equals sign are ignored because they request unsetting a
@@ -569,7 +582,9 @@ not a direct exec environment.  Do not pass those defaults to RPC child
 processes, because they can leak shell-only quoting and produce warnings on
 stdout/stderr."
   (when (boundp 'tramp-remote-process-environment)
-    (let ((baseline (default-toplevel-value 'tramp-remote-process-environment))
+    (let ((baseline (if tramp-rpc--inherited-environment-baselines
+                        (car tramp-rpc--inherited-environment-baselines)
+                      (default-toplevel-value 'tramp-remote-process-environment)))
           dynamic)
       (dolist (elt tramp-remote-process-environment)
         (unless (member elt baseline)
@@ -594,7 +609,9 @@ Compares the current `process-environment' against the toplevel default.
 Entries that are only present in the current dynamic scope (e.g. added
 by `with-environment-variables') are returned as an alist of
 \(NAME . VALUE) pairs."
-  (let ((toplevel (default-toplevel-value 'process-environment))
+  (let ((toplevel (if tramp-rpc--inherited-environment-baselines
+                     (cdr tramp-rpc--inherited-environment-baselines)
+                   (default-toplevel-value 'process-environment)))
         (env nil))
     (dolist (elt process-environment)
       (when (and (stringp elt)

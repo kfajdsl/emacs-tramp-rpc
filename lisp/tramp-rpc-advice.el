@@ -59,6 +59,19 @@
 (defvar tramp-remote-process-environment)
 (defvar tramp-file-name-for-operation-external)
 
+(defun tramp-rpc--inheritenv-apply-advice (orig-fun &rest args)
+  "Preserve RPC environment overrides while ORIG-FUN inherits them.
+ARGS are passed to `inheritenv-apply', which temporarily replaces environment
+defaults with the caller's buffer-local values.  Save the original defaults
+so RPC does not mistake those inherited values for baseline shell settings."
+  (if (not (tramp-rpc-file-name-p default-directory))
+      (apply orig-fun args)
+    (let ((tramp-rpc--inherited-environment-baselines
+           (or tramp-rpc--inherited-environment-baselines
+               (cons (default-toplevel-value 'tramp-remote-process-environment)
+                     (default-toplevel-value 'process-environment)))))
+      (apply orig-fun args))))
+
 ;; ============================================================================
 ;; Process coding state
 ;; ============================================================================
@@ -538,6 +551,7 @@ ARGS are passed to ORIG-FUN."
      . tramp-rpc--vterm-window-adjust-advice)
     (eat--adjust-process-window-size . tramp-rpc--eat-window-adjust-advice)
     ;; Integrations, which wrap the original call for TRAMP-RPC files.
+    (inheritenv-apply . tramp-rpc--inheritenv-apply-advice)
     (vc-call-backend . tramp-rpc--vc-call-backend-advice)
     (vc-exec-after . tramp-rpc--vc-exec-after-advice)
     (vc-dir-refresh . tramp-rpc--vc-dir-refresh-advice)

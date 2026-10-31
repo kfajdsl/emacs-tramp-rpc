@@ -8387,6 +8387,77 @@ discard it for being unreadable."
          (default-toplevel-value 'tramp-remote-process-environment)))
     (should-not (tramp-rpc--tramp-remote-process-environment))))
 
+(ert-deftest tramp-rpc-mock-test-environment-path-is-buffer-local ()
+  "Process PATH and executable lookup follow each buffer without remote scans."
+  (skip-unless tramp-rpc-mock-test--tramp-rpc-loaded)
+  (let* ((vec (tramp-dissect-file-name "/rpc:test-host:/tmp/"))
+         (tramp-rpc--exec-path-cache (make-hash-table :test 'equal))
+         (tramp-rpc-use-direnv nil))
+    (puthash (tramp-rpc--connection-key vec) '("/usr/bin")
+             tramp-rpc--exec-path-cache)
+    (cl-letf (((symbol-function 'tramp-rpc--compute-remote-path)
+               (lambda (&rest _) (ert-fail "Unexpected remote PATH lookup")))
+              ((symbol-function 'locate-dominating-file)
+               (lambda (&rest _) (ert-fail "Unexpected directory scan"))))
+      (dolist (path '("/project-a/bin:/usr/bin" "/project-b/bin" ""))
+        (with-temp-buffer
+          (setq default-directory "/rpc:test-host:/tmp/")
+          (setq-local tramp-remote-process-environment
+                      (cons (concat "PATH=" path)
+                            (default-toplevel-value 'tramp-remote-process-environment)))
+          (should (equal (tramp-rpc--cached-remote-path vec)
+                         (parse-colon-path path)))
+          (should (equal (tramp-rpc-handle-exec-path)
+                         (append (parse-colon-path path) '("/tmp/"))))
+          (should (equal (cdr (assoc "PATH" (tramp-rpc--process-environment vec "/tmp/")))
+                         path))))
+      (should (equal (tramp-rpc--cached-remote-path vec) '("/usr/bin"))))))
+
+(ert-deftest tramp-rpc-mock-test-environment-inheritenv-keeps-overrides ()
+  "Inherited remote variables and caller PATH survive temporary defaults."
+  (skip-unless tramp-rpc-mock-test--tramp-rpc-loaded)
+  (let ((tramp-rpc-use-direnv nil))
+    (with-temp-buffer
+      (setq default-directory "/rpc:test-host:/tmp/")
+      (setq-local tramp-remote-process-environment
+                  (append '("PROJECT=remote" "PATH=/remote/bin")
+                          (default-toplevel-value 'tramp-remote-process-environment)))
+      (setq-local process-environment
+                  (append '("GIT_INDEX_FILE=/tmp/index" "PATH=/caller/bin")
+                          (default-toplevel-value 'process-environment)))
+      (cl-labels
+          ((inherit (body)
+             ;; The public inheritenv-apply contract, without a dependency.
+             (cl-letf (((default-value 'tramp-remote-process-environment)
+                        tramp-remote-process-environment)
+                       ((default-value 'process-environment) process-environment))
+               (with-temp-buffer (funcall body))))
+           (check-env ()
+             (let* ((vec (tramp-dissect-file-name default-directory))
+                    (env (tramp-rpc--process-environment vec "/tmp/")))
+               (should (equal (cdr (assoc "PROJECT" env)) "remote"))
+               (should (equal (cdr (assoc "GIT_INDEX_FILE" env)) "/tmp/index"))
+               (should (equal (cdr (assoc "PATH" env)) "/caller/bin"))
+               (should-not (assoc "LC_CTYPE" env))
+               (should (equal (tramp-rpc-handle-exec-path) '("/caller/bin/" "/tmp/"))))))
+        (tramp-rpc--inheritenv-apply-advice
+         #'inherit
+         (lambda ()
+           (check-env)
+           (tramp-rpc--inheritenv-apply-advice #'inherit #'check-env))))))
+  (should-not tramp-rpc--inherited-environment-baselines))
+
+(ert-deftest tramp-rpc-mock-test-environment-inheritenv-leaves-local-alone ()
+  "Local calls do not acquire RPC environment state."
+  (skip-unless tramp-rpc-mock-test--tramp-rpc-loaded)
+  (let ((default-directory temporary-file-directory))
+    (should (eq (tramp-rpc--inheritenv-apply-advice
+                 (lambda (value)
+                   (should-not tramp-rpc--inherited-environment-baselines)
+                   value)
+                 'local-result)
+                'local-result))))
+
 (ert-deftest tramp-rpc-mock-test-python-tramp-environment-handler ()
   "Test python.el TRAMP environment handler avoids shell refresh for RPC."
   (skip-unless tramp-rpc-mock-test--tramp-rpc-loaded)

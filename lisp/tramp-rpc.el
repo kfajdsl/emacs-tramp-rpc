@@ -2367,7 +2367,8 @@ Uses `tramp-remote-path' by default, including its standard placeholders
 `tramp-rpc-remote-path' overrides it for backward compatibility.
 Appends the remote working directory as the last element (the equivalent
 of `exec-directory'), matching `tramp-sh-handle-exec-path' behavior.
-Caches the PATH portion per connection."
+Buffer-local and dynamically bound PATH overrides take precedence over the
+configured path.  Only the configured PATH is cached per connection."
   (with-parsed-tramp-file-name default-directory nil
     ;; Append localname of default-directory as last element,
     ;; the equivalent to `exec-directory'.

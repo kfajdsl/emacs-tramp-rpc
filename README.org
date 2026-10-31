@@ -489,6 +489,18 @@ cargo build --release --target aarch64-unknown-linux-gnu
 (setq tramp-rpc-deploy-download-timeout 60)
 #+end_src
 
+** Using envrc.el
+
+When envrc.el manages your project environments, enable its remote support,
+add ="rpc"= to ~envrc-supported-tramp-methods~, and set
+~tramp-rpc-use-direnv~ to nil to avoid running two direnv integrations.
+RPC uses buffer-local ~tramp-remote-process-environment~ overrides for both
+child processes and executable lookup, including PATH.  These overrides
+are not stored in the connection's PATH cache, so buffers in different
+projects on the same host can use different environments.  Calls wrapped
+with ~inheritenv~ retain their environment when they create temporary
+buffers.  No additional search for a dominating ~.envrc~ is performed by RPC.
+
 ** Deployment fallback policy
 
 When the expected remote binary already exists and is executable, TRAMP-RPC
